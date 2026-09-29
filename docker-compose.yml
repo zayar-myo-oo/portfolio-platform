@@ -1,0 +1,17 @@
+# Optional alternative to `npm run db:start` (embedded Postgres).
+# Same credentials and port, so DATABASE_URL in .env works with either.
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: portfolio
+      POSTGRES_DB: portfolio
+    ports:
+      - "54329:5432"
+    volumes:
+      - portfolio-postgres:/var/lib/postgresql
+
+volumes:
+  portfolio-postgres:

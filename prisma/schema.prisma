@@ -1,0 +1,492 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Portfolio platform content model.
+//
+// Everything the public site renders lives here and is edited from /admin.
+// `isSample` marks seeded placeholder content so it is visibly labelled on the
+// site and can be purged in one action from the admin dashboard.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Identity & access ───────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         Role      @default(ADMIN)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+}
+
+/// Server-side sessions. Only a SHA-256 hash of the cookie token is stored.
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Fixed-window rate limiting (login attempts, contact form, analytics).
+/// Keys are hashed; no raw IP addresses are persisted.
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+}
+
+// ── Site configuration ──────────────────────────────────────────────────────
+
+/// Singleton row (id = "site") holding identity, hero, about and SEO content.
+model SiteSetting {
+  id                         String   @id @default("site")
+  ownerName                  String
+  role                       String
+  headline                   String[]
+  statement                  String
+  currentFocus               String?
+  currentlyBuilding          String?
+  currentlyBuildingProjectId String?
+  currentlyBuildingProject   Project? @relation("CurrentlyBuilding", fields: [currentlyBuildingProjectId], references: [id], onDelete: SetNull)
+  location                   String?
+  timezone                   String   @default("UTC")
+  isAvailable                Boolean  @default(false)
+  availability               String?
+  email                      String?
+  githubUsername             String?
+  /// [{ label, url }]
+  socials                    Json     @default("[]")
+  resumeUrl                  String?
+
+  // About page
+  aboutIntro                 String?
+  philosophy                 String?
+  /// [{ title, body }]
+  principles                 Json     @default("[]")
+  interests                  String[]
+  likesBuilding              String[]
+  /// [{ period, title, body }]
+  journey                    Json     @default("[]")
+  portraitId                 String?
+  portrait                   Media?   @relation("SitePortrait", fields: [portraitId], references: [id], onDelete: SetNull)
+
+  // SEO defaults
+  siteTitle                  String
+  siteDescription            String
+  ogImageId                  String?
+  ogImage                    Media?   @relation("SiteOgImage", fields: [ogImageId], references: [id], onDelete: SetNull)
+
+  updatedAt                  DateTime @updatedAt
+}
+
+// ── Media ───────────────────────────────────────────────────────────────────
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+}
+
+model Media {
+  id           String    @id @default(cuid())
+  /// Storage key, e.g. "2026/09/8f3c…e1.webp". Served at /media/<key>.
+  key          String    @unique
+  originalName String
+  mimeType     String
+  size         Int
+  width        Int?
+  height       Int?
+  alt          String    @default("")
+  kind         MediaKind
+  createdAt    DateTime  @default(now())
+
+  projectThumbnails    Project[]      @relation("ProjectThumbnail")
+  projectPreviewVideos Project[]      @relation("ProjectPreviewVideo")
+  galleries            ProjectMedia[]
+  postCovers           BlogPost[]
+  experimentThumbnails Experiment[]
+  sitePortraits        SiteSetting[]  @relation("SitePortrait")
+  siteOgImages         SiteSetting[]  @relation("SiteOgImage")
+}
+
+/// File bytes for MEDIA_STORAGE=database — used on serverless hosts (Vercel)
+/// where the filesystem is not persistent. Keyed by the same storage key.
+model MediaFile {
+  key       String   @id
+  data      Bytes
+  createdAt DateTime @default(now())
+}
+
+// ── Technology ──────────────────────────────────────────────────────────────
+
+enum TechCategory {
+  LANGUAGE
+  FRONTEND
+  BACKEND
+  DATABASE
+  CLOUD
+  DEVOPS
+  TOOLS
+  ARCHITECTURE
+}
+
+enum Proficiency {
+  EXPERT
+  PROFICIENT
+  FAMILIAR
+  LEARNING
+}
+
+model Technology {
+  id          String              @id @default(cuid())
+  name        String              @unique
+  slug        String              @unique
+  category    TechCategory
+  proficiency Proficiency         @default(PROFICIENT)
+  /// Year first used in real work — drives "N years" (never a percentage).
+  since       Int?
+  description String?
+  url         String?
+  featured    Boolean             @default(false)
+  order       Int                 @default(0)
+  isSample    Boolean             @default(false)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  projects    ProjectTechnology[]
+  experiences Experience[]
+  experiments Experiment[]
+
+  @@index([category, order])
+}
+
+// ── Projects ────────────────────────────────────────────────────────────────
+
+enum ProjectStatus {
+  LIVE
+  BETA
+  DEVELOPMENT
+  ARCHIVED
+  PRIVATE
+  EXPERIMENTAL
+}
+
+enum ProjectCategory {
+  WEB
+  MOBILE
+  BACKEND
+  AI
+  TOOL
+  EXPERIMENT
+  OPEN_SOURCE
+  CLIENT
+}
+
+model Project {
+  id                  String            @id @default(cuid())
+  slug                String            @unique
+  title               String
+  tagline             String?
+  summary             String
+  /// Long description / overview (Markdown)
+  description         String?
+  role                String?
+  year                Int
+  duration            String?
+  status              ProjectStatus     @default(DEVELOPMENT)
+  categories          ProjectCategory[]
+  /// Display label, e.g. "Developer Tool", "Backend System"
+  typeLabel           String?
+
+  // Case study sections (Markdown, all optional — empty sections are hidden)
+  problem             String?
+  context             String?
+  goals               String?
+  solution            String?
+  architecture        String?
+  /// Architecture diagram DSL source (see src/lib/architecture)
+  architectureDiagram String?
+  implementation      String?
+  challenges          String?
+  decisions           String?
+  performance         String?
+  security            String?
+  results             String?
+  lessonsLearned      String?
+  /// [{ title, description }]
+  features            Json              @default("[]")
+  /// [{ label, value }] — key facts/metrics shown in the case-study hero
+  highlights          Json              @default("[]")
+
+  // Links
+  liveUrl             String?
+  repoUrl             String?
+  demoUrl             String?
+  /// Optional hosting label override; otherwise detected from liveUrl
+  hosting             String?
+
+  // Media
+  thumbnailId         String?
+  thumbnail           Media?            @relation("ProjectThumbnail", fields: [thumbnailId], references: [id], onDelete: SetNull)
+  previewVideoId      String?
+  previewVideo        Media?            @relation("ProjectPreviewVideo", fields: [previewVideoId], references: [id], onDelete: SetNull)
+  gallery             ProjectMedia[]
+  /// Optional hex accent for generated covers, e.g. "#ff5a1f"
+  accent              String?
+
+  // Publishing & portal
+  published           Boolean           @default(false)
+  publishedAt         DateTime?
+  featured            Boolean           @default(false)
+  showInPortal        Boolean           @default(true)
+  portalOrder         Int               @default(0)
+  /// Owner opt-in for "Open in Portal" iframe previews (still header-checked)
+  allowEmbed          Boolean           @default(false)
+
+  // SEO
+  seoTitle            String?
+  seoDescription      String?
+
+  isSample            Boolean           @default(false)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  technologies        ProjectTechnology[]
+  links               ProjectLink[]
+  posts               BlogPost[]        @relation("ProjectPosts")
+  experiences         Experience[]
+  currentlyBuildingIn SiteSetting[]     @relation("CurrentlyBuilding")
+
+  @@index([published, featured])
+  @@index([showInPortal, portalOrder])
+}
+
+model ProjectTechnology {
+  projectId    String
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  technologyId String
+  technology   Technology @relation(fields: [technologyId], references: [id], onDelete: Cascade)
+  order        Int        @default(0)
+
+  @@id([projectId, technologyId])
+  @@index([technologyId])
+}
+
+enum LinkKind {
+  LIVE
+  REPOSITORY
+  DEMO
+  DOCS
+  ARTICLE
+  VIDEO
+  DESIGN
+  OTHER
+}
+
+model ProjectLink {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  label     String
+  url       String
+  kind      LinkKind @default(OTHER)
+  order     Int      @default(0)
+
+  @@index([projectId])
+}
+
+model ProjectMedia {
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  mediaId   String
+  media     Media   @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  order     Int     @default(0)
+  caption   String?
+
+  @@id([projectId, mediaId])
+}
+
+// ── Experience ──────────────────────────────────────────────────────────────
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  FREELANCE
+  INTERNSHIP
+  EDUCATION
+  VOLUNTEER
+}
+
+model Experience {
+  id               String         @id @default(cuid())
+  company          String
+  companyUrl       String?
+  role             String
+  location         String?
+  employmentType   EmploymentType @default(FULL_TIME)
+  startDate        DateTime
+  /// null = current position
+  endDate          DateTime?
+  summary          String
+  description      String?
+  responsibilities String[]
+  achievements     String[]
+  order            Int            @default(0)
+  published        Boolean        @default(true)
+  isSample         Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  technologies     Technology[]
+  projects         Project[]
+
+  @@index([published, startDate])
+}
+
+// ── Blog ────────────────────────────────────────────────────────────────────
+
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+}
+
+/// A PUBLISHED post with a future `publishedAt` is "scheduled".
+model BlogPost {
+  id             String     @id @default(cuid())
+  slug           String     @unique
+  title          String
+  excerpt        String
+  /// Markdown with directives (sanitised at render time)
+  content        String
+  status         PostStatus @default(DRAFT)
+  publishedAt    DateTime?
+  featured       Boolean    @default(false)
+  readingMinutes Int        @default(1)
+  coverId        String?
+  cover          Media?     @relation(fields: [coverId], references: [id], onDelete: SetNull)
+  categoryId     String?
+  category       Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  seoTitle       String?
+  seoDescription String?
+  canonicalUrl   String?
+  isSample       Boolean    @default(false)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  tags           Tag[]
+  projects       Project[]  @relation("ProjectPosts")
+
+  @@index([status, publishedAt])
+}
+
+model Category {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  slug        String     @unique
+  description String?
+  order       Int        @default(0)
+  posts       BlogPost[]
+}
+
+model Tag {
+  id    String     @id @default(cuid())
+  name  String     @unique
+  slug  String     @unique
+  posts BlogPost[]
+}
+
+// ── Experiments ─────────────────────────────────────────────────────────────
+
+enum ExperimentStatus {
+  CONCEPT
+  IN_PROGRESS
+  PLAYABLE
+  ARCHIVED
+}
+
+enum ExperimentKind {
+  UI
+  AI
+  THREE_D
+  WEBGL
+  CREATIVE_CODING
+  AUDIO
+  DEV_TOOL
+  TYPOGRAPHY
+  OTHER
+}
+
+model Experiment {
+  id           String           @id @default(cuid())
+  slug         String           @unique
+  title        String
+  summary      String
+  description  String?
+  status       ExperimentStatus @default(IN_PROGRESS)
+  kind         ExperimentKind   @default(OTHER)
+  year         Int
+  /// Key of an interactive sketch registered in code (src/components/experiments/sketches)
+  sketch       String?
+  url          String?
+  repoUrl      String?
+  thumbnailId  String?
+  thumbnail    Media?           @relation(fields: [thumbnailId], references: [id], onDelete: SetNull)
+  published    Boolean          @default(false)
+  featured     Boolean          @default(false)
+  order        Int              @default(0)
+  isSample     Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  technologies Technology[]
+
+  @@index([published, order])
+}
+
+// ── Inbox & analytics ───────────────────────────────────────────────────────
+
+model ContactMessage {
+  id        String    @id @default(cuid())
+  name      String
+  email     String
+  subject   String?
+  message   String
+  readAt    DateTime?
+  archived  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  @@index([archived, createdAt])
+}
+
+/// Privacy-preserving events: no IPs, user agents, cookies or visitor IDs.
+model AnalyticsEvent {
+  id           String   @id @default(cuid())
+  type         String
+  path         String?
+  entityType   String?
+  entityId     String?
+  referrerHost String?
+  createdAt    DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@index([entityType, entityId])
+}
